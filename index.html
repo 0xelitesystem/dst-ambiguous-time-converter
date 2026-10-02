@@ -1,0 +1,1161 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<title>DST Ambiguous Time Converter: find gap and fold rows before a migration</title>
+<meta name="description" content="Paste a column of naive local timestamps and an IANA time zone to find every row that falls in a DST gap (never existed) or fold (happened twice), with its UTC value under the Temporal, Python and PostgreSQL rules, before you migrate the data.">
+<meta name="color-scheme" content="dark light">
+<link rel="canonical" href="https://0xelitesystem.github.io/dst-ambiguous-time-converter/">
+<meta property="og:title" content="DST Ambiguous Time Converter">
+<meta property="og:description" content="Find every row in a column of naive local timestamps that falls in a DST gap or fold, with its UTC value under the Temporal, Python and PostgreSQL rules. Runs entirely in your browser.">
+<meta property="og:url" content="https://0xelitesystem.github.io/dst-ambiguous-time-converter/">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"DST Ambiguous Time Converter","applicationCategory":"DeveloperApplication","operatingSystem":"Any (browser)","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"url":"https://0xelitesystem.github.io/dst-ambiguous-time-converter/","author":{"@type":"Person","name":"0xelitesystem","url":"https://elitesystem.ai"}}
+</script>
+<script>
+(function () {
+  var t = null;
+  try { t = localStorage.getItem("theme"); } catch (e) {}
+  if (t !== "light" && t !== "dark") {
+    t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark";
+  }
+  document.documentElement.setAttribute("data-theme", t);
+})();
+</script>
+<style>
+:root, :root[data-theme="dark"] {
+  --bg: #0a0a0a;
+  --surface: #141413;
+  --surface2: #1c1c1a;
+  --ink: #e8e8e3;
+  --ink-soft: #b0b0aa;
+  --line: #6e6e68;
+  --accent: #d4ff3a;
+  --accent-ink: #0a0a0a;
+  --fold: #c9b3ff;
+  --gap: #ffb454;
+  --err: #ff7a66;
+  --ok: #7ddc7d;
+  --info: #8cc8ff;
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --bg: #e8ebef;
+  --surface: #f7f8fa;
+  --surface2: #ffffff;
+  --ink: #0a0a0a;
+  --ink-soft: #3b4048;
+  --line: #7a808a;
+  --accent: #2d6b00;
+  --accent-ink: #ffffff;
+  --fold: #5b2fa8;
+  --gap: #8a4d00;
+  --err: #a82d14;
+  --ok: #1a5c2e;
+  --info: #1d4f91;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 15px; line-height: 1.5;
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding: 24px 16px 56px; }
+header.top { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+h1 { font-size: 1.6rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+h2 { font-size: 1.15rem; margin: 0 0 10px; }
+h3 { font-size: 1rem; margin: 16px 0 8px; }
+.lede { margin: 0; color: var(--ink-soft); max-width: 78ch; }
+a { color: var(--accent); text-decoration: underline; text-underline-offset: 0.15em; }
+code, .mono, textarea, td.m { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+code { font-size: 0.92em; overflow-wrap: anywhere; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 16px 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 16px; }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.field > label, .lbl { font-size: 0.85rem; font-weight: 600; color: var(--ink); }
+.hint { font-size: 0.85rem; color: var(--ink-soft); margin: 4px 0 0; }
+input, select, textarea, button { font: inherit; color: var(--ink); }
+input[type="text"], select, textarea {
+  background: var(--surface2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; min-height: 38px; width: 100%;
+}
+textarea { min-height: 180px; resize: vertical; font-size: 0.88rem; line-height: 1.45; }
+textarea.out { min-height: 120px; }
+.check { display: flex; gap: 8px; align-items: center; font-size: 0.92rem; }
+.check input { width: 18px; height: 18px; accent-color: var(--accent); }
+button {
+  background: var(--surface2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 14px; min-height: 38px; cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 650; }
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+.status { font-size: 0.9rem; color: var(--ink-soft); min-height: 1.4em; margin: 8px 0 0; }
+.msg { border: 1px solid var(--line); border-left-width: 4px; border-radius: 8px; padding: 8px 12px; margin: 8px 0; background: var(--surface); }
+.msg.err { border-left-color: var(--err); }
+.msg.info { border-left-color: var(--info); }
+.msg.warn { border-left-color: var(--gap); }
+.msg.ok { border-left-color: var(--ok); }
+.msg strong.t-err { color: var(--err); }
+.msg strong.t-warn { color: var(--gap); }
+.msg strong.t-ok { color: var(--ok); }
+.msg strong.t-info { color: var(--info); }
+.hidden { display: none !important; }
+.summary { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0; padding: 0; list-style: none; }
+.summary li { font-variant-numeric: tabular-nums; }
+.summary b { font-size: 1.05rem; }
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; max-width: 100%; }
+table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--surface2); font-weight: 650; white-space: nowrap; position: sticky; top: 0; }
+td { background: var(--surface); }
+td.m { white-space: nowrap; font-size: 0.82rem; }
+.badge { display: inline-block; border: 1px solid currentColor; border-radius: 999px; padding: 0 8px; font-size: 0.78rem; font-weight: 650; white-space: nowrap; }
+.k-fold { color: var(--fold); }
+.k-gap { color: var(--gap); }
+.k-err { color: var(--err); }
+.k-ok { color: var(--ok); }
+.k-info { color: var(--info); }
+.soft { color: var(--ink-soft); }
+details > summary { cursor: pointer; font-weight: 650; padding: 6px 0; min-height: 24px; }
+.tests { list-style: none; padding: 0; margin: 8px 0 0; font-size: 0.86rem; }
+.tests li { padding: 3px 0; border-bottom: 1px solid var(--line); }
+blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid var(--line); color: var(--ink-soft); }
+footer.foot { margin-top: 32px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--ink-soft); font-size: 0.86rem; }
+@media (max-width: 560px) {
+  h1 { font-size: 1.35rem; }
+  .panel { padding: 12px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>DST Ambiguous Time Converter</h1>
+      <p class="lede">Paste a column of naive local timestamps and an IANA time zone. Every row that falls in a gap (a wall time that never existed) or a fold (a wall time that happened twice) is listed with its UTC value under the Temporal, Python and PostgreSQL rules, plus what pandas will do with the column. Everything runs in this page; nothing leaves your browser.</p>
+    </div>
+    <button type="button" id="theme-toggle" aria-label="Switch to light theme">Light</button>
+  </header>
+
+  <main>
+  <section class="panel" aria-labelledby="h-input">
+    <h2 id="h-input">1. Input</h2>
+    <div class="field">
+      <label for="input">Timestamps: one per line, or CSV/TSV with a header row</label>
+      <textarea id="input" spellcheck="false" aria-describedby="input-hint"></textarea>
+      <p class="hint" id="input-hint">Accepted: <code>YYYY-MM-DD HH:MM</code>, <code>YYYY-MM-DD HH:MM:SS</code>, the same with a <code>T</code>, an optional <code>.fraction</code> of 1 to 9 digits after the seconds, and a date alone (read as midnight). Slash dates only with the date order chosen below. An empty cell is kept as NaT.</p>
+    </div>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="hasHeader"> First line is a header row (CSV or TSV)</label>
+    </div>
+    <div class="grid" style="margin-top:12px">
+      <div class="field">
+        <label for="column">Timestamp column</label>
+        <select id="column" disabled><option value="0">(one value per line)</option></select>
+      </div>
+      <div class="field">
+        <label for="zone">IANA time zone</label>
+        <input type="text" id="zone" list="zones" value="America/New_York" autocomplete="off" spellcheck="false" aria-describedby="zone-hint">
+        <datalist id="zones"></datalist>
+        <p class="hint" id="zone-hint">Any identifier your browser accepts. The suggestion list is a convenience only.</p>
+      </div>
+      <div class="field">
+        <label for="order">Date order</label>
+        <select id="order">
+          <option value="iso">YYYY-MM-DD only</option>
+          <option value="mdy">MM/DD/YYYY (and ISO)</option>
+          <option value="dmy">DD/MM/YYYY (and ISO)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="policy">Policy for the export</label>
+        <select id="policy">
+          <option value="compatible">Temporal 'compatible' = Python fold=0</option>
+          <option value="earlier">Temporal 'earlier'</option>
+          <option value="later">Temporal 'later'</option>
+          <option value="postgres">PostgreSQL (later instant on both)</option>
+          <option value="py1">Python fold=1</option>
+          <option value="reject">Temporal 'reject' (export blank)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="pdAmb">pandas <code>ambiguous=</code></label>
+        <select id="pdAmb">
+          <option value="raise">'raise' (default)</option>
+          <option value="infer">'infer'</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="pdNon">pandas <code>nonexistent=</code></label>
+        <select id="pdNon">
+          <option value="raise">'raise' (default)</option>
+          <option value="NaT">'NaT'</option>
+        </select>
+      </div>
+    </div>
+    <div class="row">
+      <button type="button" class="primary" id="run">Analyse column</button>
+      <button type="button" id="example">Load example</button>
+      <button type="button" id="clear">Clear</button>
+      <span class="soft" style="font-size:0.85rem">Ctrl or Cmd + Enter runs it.</span>
+    </div>
+    <p class="status" id="progress" role="status" aria-live="polite"></p>
+    <div id="zoneMsgs"></div>
+  </section>
+
+  <section class="panel hidden" id="results" aria-labelledby="h-results">
+    <h2 id="h-results">2. Results</h2>
+    <ul class="summary" id="summary"></ul>
+    <div id="temporalLine"></div>
+    <div id="pandasBox"></div>
+    <div id="preNote"></div>
+
+    <h3 id="h-aff">Gap and fold rows</h3>
+    <p class="hint">Every UTC value is <code>YYYY-MM-DDTHH:MM:SS[.fraction]Z</code>. A <span class="badge k-err">DISAGREEMENT</span> badge marks rows where the Python and Temporal default and PostgreSQL write different instants. Python fold=0 is the earlier instant on a fold but the later instant on a gap. The column sources are listed under the table.</p>
+    <div class="scroll" role="region" aria-labelledby="h-aff" tabindex="0"><table id="affected"></table></div>
+    <p class="hint" id="affNote"></p>
+    <details>
+      <summary>Column sources</summary>
+      <ul class="hint">
+        <li>Temporal 'earlier', 'later', 'compatible', 'reject': the <code>disambiguation</code> option of <code>Temporal.PlainDateTime.prototype.toZonedDateTime</code>, documented at <code>tc39.es/proposal-temporal/docs/zoneddatetime.html</code>. 'compatible' is the default: "Acts like 'earlier' for backward transitions and 'later' for forward transitions."</li>
+        <li>Python fold=0 and fold=1: PEP 495, section "Mind the Gap": "the rules in effect before the transition should be used if fold=0. Otherwise, the rules in effect after the transition should be used." So fold=0 is the earlier instant on a fold but the later instant on a gap.</li>
+        <li>PostgreSQL: Appendix B.2, "Handling of Invalid or Ambiguous Timestamps": "an invalid timestamp that appears to fall within a jump-forward daylight savings transition is assigned the UTC offset that prevailed in the time zone just before the transition, while an ambiguous timestamp that could fall on either side of a jump-back transition is assigned the UTC offset that prevailed just after the transition." That is the later instant on both kinds of row.</li>
+        <li>RFC 9557 column: the suffix syntax of RFC 9557 section 4.1, <code>time-zone = "[" critical-flag time-zone-name "]"</code>, written without the critical flag.</li>
+      </ul>
+    </details>
+
+    <h3 id="h-tr">Transitions used</h3>
+    <p class="hint">This page does not know which tz database release your browser carries; these are the transitions it used.</p>
+    <div class="scroll" role="region" aria-labelledby="h-tr" tabindex="0"><table id="trans"></table></div>
+
+    <h3 id="h-fl">Rejected and flagged rows</h3>
+    <div class="scroll" role="region" aria-labelledby="h-fl" tabindex="0"><table id="flags"></table></div>
+    <p class="hint" id="flagNote"></p>
+
+    <h3>Export</h3>
+    <div class="field">
+      <label for="csvOut">Full column as CSV under the chosen policy (every input column plus kind, status, utc, offset_used, ixdtf)</label>
+      <textarea id="csvOut" class="out" readonly spellcheck="false"></textarea>
+    </div>
+    <div class="row"><button type="button" id="copyCsv">Copy CSV</button><span class="status" id="copyCsvMsg" role="status" aria-live="polite"></span></div>
+    <div class="field" style="margin-top:12px">
+      <label for="boolOut">pandas <code>ambiguous=</code> list for the chosen policy, one bool per row (True = earlier instant)</label>
+      <textarea id="boolOut" class="out" readonly spellcheck="false"></textarea>
+    </div>
+    <div class="row"><button type="button" id="copyBool">Copy list (True = earlier instant)</button><span class="status" id="copyBoolMsg" role="status" aria-live="polite"></span></div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-test">
+    <h2 id="h-test">3. Self test</h2>
+    <p class="hint">Runs on load. Known answers for gaps, folds, sub-minute offsets, the parser and the pandas predictor, plus one assertion built to fail so a self test that stopped running would be visible. When this browser has Temporal, the page also compares its own classifier with Temporal around every transition from 1970 to 2040 in a spread of zones and prints the counts it computed.</p>
+    <p id="testSummary" role="status" aria-live="polite"></p>
+    <p id="diffSummary" role="status" aria-live="polite"></p>
+    <div class="row"><button type="button" id="runTests">Run self test again</button></div>
+    <details><summary>Every assertion</summary><ul class="tests" id="testList"></ul></details>
+  </section>
+
+  <section class="panel" aria-labelledby="h-why">
+    <h2 id="h-why">Why the columns disagree</h2>
+    <p>Each system follows a published rule, and the rules differ only on fold rows. For <code>America/New_York 2025-11-02 01:30</code>, Python <code>datetime</code> with <code>zoneinfo</code> (fold=0 by default) gives <code>2025-11-02T05:30:00Z</code>, Temporal's default 'compatible' gives <code>2025-11-02T01:30:00-04:00</code> (also 05:30Z), and PostgreSQL's <code>'2025-11-02 01:30'::timestamp AT TIME ZONE 'America/New_York'</code> gives <code>2025-11-02 06:30:00+00</code>. For the gap row <code>2025-03-09 02:30</code> all three give 07:30Z. pandas raises by default on both kinds of row. The page never calls an offset "DST" or "standard": the tz database encodes Europe/Dublin with a negative save value, so Dublin's summer +01:00 is its standard time in that data.</p>
+    <p class="hint">The pandas predictor reimplements the <code>ambiguous='infer'</code> rule of pandas 3.0.5 <code>tzconversion.pyx</code> (BSD 3-Clause, see the README) and was re-checked against pandas 3.0.6. It uses this browser's transitions; pandas uses the tz database your Python reads. It does not emulate <code>nonexistent='shift_forward'</code>, <code>'shift_backward'</code> or a timedelta. Independent project: not affiliated with or endorsed by the pandas project, the PostgreSQL Global Development Group, the Python Software Foundation, TC39 or IANA.</p>
+  </section>
+  </main>
+
+  <footer class="foot">
+    MIT licensed, single file, no network. An <a href="https://elitesystem.ai">elitesystem.ai</a> tool. <a href="https://github.com/0xelitesystem/dst-ambiguous-time-converter">Source on GitHub</a>. <a href="https://0xelitesystem.github.io/">More tools</a>.
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var DAY = 86400000;
+  var MAX_ROWS = 100000;
+  var CHUNK = 2000;
+  var SHOW = 500;
+  var HAS_TEMPORAL = typeof Temporal !== "undefined";
+
+  /* ---------- small helpers ---------- */
+  function pad(n, w) { var s = String(Math.abs(n)); while (s.length < w) { s = "0" + s; } return (n < 0 ? "-" : "") + s; }
+  function el(tag, attrs, kids) {
+    var e = document.createElement(tag);
+    if (attrs) {
+      for (var k in attrs) {
+        if (!Object.prototype.hasOwnProperty.call(attrs, k)) { continue; }
+        if (k === "text") { e.textContent = attrs[k]; }
+        else if (k === "cls") { e.className = attrs[k]; }
+        else { e.setAttribute(k, attrs[k]); }
+      }
+    }
+    if (kids) { for (var i = 0; i < kids.length; i++) { if (kids[i] != null) { e.appendChild(typeof kids[i] === "string" ? document.createTextNode(kids[i]) : kids[i]); } } }
+    return e;
+  }
+  function clear(node) { while (node.firstChild) { node.removeChild(node.firstChild); } }
+
+  /* ---------- time arithmetic (never Date.parse, never Date.UTC, never the local zone) ---------- */
+  function wallMs(y, mo, d, h, mi, s) {
+    var t = new Date(0);
+    t.setUTCFullYear(y, mo - 1, d);
+    t.setUTCHours(h, mi, s, 0);
+    return t.getTime();
+  }
+  function fieldsOf(ms) {
+    var t = new Date(ms);
+    return { y: t.getUTCFullYear(), mo: t.getUTCMonth() + 1, d: t.getUTCDate(), h: t.getUTCHours(), mi: t.getUTCMinutes(), s: t.getUTCSeconds() };
+  }
+  function fmtWall(f, sep, frac) {
+    return pad(f.y, 4) + "-" + pad(f.mo, 2) + "-" + pad(f.d, 2) + sep + pad(f.h, 2) + ":" + pad(f.mi, 2) + ":" + pad(f.s, 2) + (frac ? "." + frac : "");
+  }
+  function isoZ(ms, frac) { return fmtWall(fieldsOf(ms), "T", frac) + "Z"; }
+  function fmtOff(ms) {
+    var sign = ms < 0 ? "-" : "+";
+    var a = Math.abs(Math.round(ms / 1000));
+    var h = Math.floor(a / 3600), m = Math.floor((a % 3600) / 60), s = a % 60;
+    return sign + pad(h, 2) + ":" + pad(m, 2) + (s ? ":" + pad(s, 2) : "");
+  }
+  function fmtDur(ms) {
+    var a = Math.round(Math.abs(ms) / 1000);
+    var h = Math.floor(a / 3600), m = Math.floor((a % 3600) / 60), s = a % 60;
+    var out = [];
+    if (h) { out.push(h + " h"); }
+    if (m) { out.push(m + " min"); }
+    if (s) { out.push(s + " s"); }
+    return out.length ? out.join(" ") : "0 s";
+  }
+  function daysIn(y, mo) {
+    if (mo === 2) { return ((y % 4 === 0 && y % 100 !== 0) || y % 400 === 0) ? 29 : 28; }
+    return [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1];
+  }
+
+  /* ---------- zones ---------- */
+  var zoneCache = {};
+  function checkZone(id) {
+    if (!id) { return { ok: false, reason: "Enter an IANA time zone identifier, for example America/New_York." }; }
+    try {
+      var f = new Intl.DateTimeFormat("en-US", { timeZone: id });
+      return { ok: true, resolved: f.resolvedOptions().timeZone };
+    } catch (e) {
+      return { ok: false, reason: "This browser does not recognise the time zone identifier \"" + id + "\"." };
+    }
+  }
+  function zoneObj(id) {
+    var z = zoneCache[id];
+    if (!z) {
+      z = {
+        id: id,
+        fmt: new Intl.DateTimeFormat("en-US", { timeZone: id, hourCycle: "h23", era: "short", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric" }),
+        off: new Map()
+      };
+      zoneCache[id] = z;
+    }
+    return z;
+  }
+  function offsetAt(z, ms) {
+    var s = Math.floor(ms / 1000) * 1000;
+    var c = z.off.get(s);
+    if (c !== undefined) { return c; }
+    var parts = z.fmt.formatToParts(new Date(s));
+    var v = {};
+    for (var i = 0; i < parts.length; i++) { v[parts[i].type] = parts[i].value; }
+    var y = parseInt(v.year, 10);
+    if (/^b/i.test(v.era || "")) { y = 1 - y; }
+    var h = parseInt(v.hour, 10);
+    if (h === 24) { h = 0; }
+    var o = wallMs(y, parseInt(v.month, 10), parseInt(v.day, 10), h, parseInt(v.minute, 10), parseInt(v.second, 10)) - s;
+    if (z.off.size > 400000) { z.off.clear(); }
+    z.off.set(s, o);
+    return o;
+  }
+  function transitionAt(z, E, o1) {
+    var lo = E - DAY, hi = E + DAY;
+    while (hi - lo > 1000) {
+      var mid = lo + Math.floor((hi - lo) / 2000) * 1000;
+      if (offsetAt(z, mid) === o1) { lo = mid; } else { hi = mid; }
+    }
+    return hi;
+  }
+  /* E = the wall-clock fields read as if UTC, in ms. */
+  function classify(z, E) {
+    var o1 = offsetAt(z, E - DAY), o2 = offsetAt(z, E + DAY);
+    var cands = [E - o1];
+    if (o2 !== o1) { cands.push(E - o2); }
+    var ok = [];
+    for (var i = 0; i < cands.length; i++) { if (offsetAt(z, cands[i]) === E - cands[i]) { ok.push(cands[i]); } }
+    if (ok.length === 1) { return { kind: "normal", utc: ok[0], off: E - ok[0] }; }
+    if (o1 === o2) { return { kind: "unclassified" }; }
+    var T = transitionAt(z, E, o1);
+    if (ok.length === 2) {
+      return { kind: "fold", earlier: Math.min(ok[0], ok[1]), later: Math.max(ok[0], ok[1]), before: o1, after: o2, len: o1 - o2, T: T };
+    }
+    return { kind: "gap", earlier: E - o2, later: E - o1, before: o1, after: o2, len: o2 - o1, T: T };
+  }
+
+  /* ---------- strict parser ---------- */
+  var RE_ISO = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?)?$/;
+  var RE_SLASH = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?)?$/;
+  var RE_ISO_HEAD = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(.+)$/;
+  var RE_SLASH_HEAD = /^\d{1,2}\/\d{1,2}\/\d{4}[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(.+)$/;
+  function parseCell(raw, order) {
+    var s = String(raw == null ? "" : raw).trim();
+    if (s === "") { return { nat: true }; }
+    var y, mo, d, h, mi, sec, frac, dateOnly, m = RE_ISO.exec(s);
+    if (m) {
+      y = +m[1]; mo = +m[2]; d = +m[3];
+    } else {
+      var ms = RE_SLASH.exec(s);
+      if (ms && order !== "iso") {
+        m = ms;
+        if (order === "mdy") { mo = +m[1]; d = +m[2]; } else { d = +m[1]; mo = +m[2]; }
+        y = +m[3];
+      } else if (ms) {
+        return { err: "slash date: choose MM/DD/YYYY or DD/MM/YYYY under Date order (this page never guesses)" };
+      } else {
+        var tail = RE_ISO_HEAD.exec(s) || RE_SLASH_HEAD.exec(s);
+        if (tail && /^(Z|z|[+-]\d)/.test(tail[1])) { return { err: "already has an offset, not a naive timestamp" }; }
+        if (tail && /^\[/.test(tail[1])) { return { err: "carries a time zone annotation, not a naive timestamp" }; }
+        return { err: "not a recognised timestamp format" };
+      }
+    }
+    dateOnly = m[4] === undefined;
+    h = dateOnly ? 0 : +m[4];
+    mi = dateOnly ? 0 : +m[5];
+    sec = m[6] === undefined ? 0 : +m[6];
+    frac = m[7] === undefined ? "" : m[7];
+    if (y < 1) { return { err: "year " + pad(y, 4) + " is out of range (1 to 9999)" }; }
+    if (mo < 1 || mo > 12) { return { err: "month " + mo + " does not exist" }; }
+    if (d < 1 || d > daysIn(y, mo)) { return { err: "day " + d + " does not exist in " + pad(y, 4) + "-" + pad(mo, 2) }; }
+    if (h === 24) { return { err: "hour 24 is not accepted; write 00:00 of the next day" }; }
+    if (h > 23) { return { err: "hour " + h + " does not exist" }; }
+    if (mi > 59) { return { err: "minute " + mi + " does not exist" }; }
+    if (sec === 60) { return { err: "second 60 (a leap second) is not accepted" }; }
+    if (sec > 60) { return { err: "second " + sec + " does not exist" }; }
+    return { y: y, mo: mo, d: d, h: h, mi: mi, s: sec, frac: frac, dateOnly: dateOnly };
+  }
+
+  /* ---------- one row ---------- */
+  function analyseCell(z, raw, order) {
+    var p = parseCell(raw, order);
+    if (p.nat) { return { kind: "nat" }; }
+    if (p.err) { return { kind: "rejected", reason: p.err }; }
+    var E = wallMs(p.y, p.mo, p.d, p.h, p.mi, p.s);
+    var c = classify(z, E);
+    c.p = p;
+    c.E = E;
+    return c;
+  }
+  function policyUtc(r, pol) {
+    if (r.kind === "normal") { return r.utc; }
+    if (r.kind !== "fold" && r.kind !== "gap") { return null; }
+    switch (pol) {
+      case "earlier": return r.earlier;
+      case "later": return r.later;
+      case "postgres": return r.later;
+      case "compatible": return r.kind === "fold" ? r.earlier : r.later;
+      case "py1": return r.kind === "fold" ? r.later : r.earlier;
+      default: return null;
+    }
+  }
+  function ixdtf(z, utc, frac, label) {
+    var off = offsetAt(z, utc);
+    if (off % 60000 !== 0) { return null; }
+    return fmtWall(fieldsOf(utc + off), "T", frac) + fmtOff(off) + "[" + label + "]";
+  }
+
+  /* ---------- Temporal per-row check ---------- */
+  function temporalCheck(id, r) {
+    if (!HAS_TEMPORAL || (r.kind !== "normal" && r.kind !== "fold" && r.kind !== "gap")) { return null; }
+    try {
+      var p = r.p;
+      var pdt = Temporal.PlainDateTime.from({ year: p.y, month: p.mo, day: p.d, hour: p.h, minute: p.mi, second: p.s });
+      var e = pdt.toZonedDateTime(id, { disambiguation: "earlier" });
+      var l = pdt.toZonedDateTime(id, { disambiguation: "later" });
+      var em = e.epochMilliseconds, lm = l.epochMilliseconds;
+      var kind = em === lm ? "normal" : (e.toPlainDateTime().equals(pdt) ? "fold" : "gap");
+      var ok;
+      if (kind !== r.kind) { ok = false; }
+      else if (kind === "normal") { ok = em === r.utc; }
+      else { ok = em === r.earlier && lm === r.later; }
+      return { ok: ok, kind: kind, earlier: em, later: lm };
+    } catch (err) {
+      return { ok: false, error: String(err && err.message || err) };
+    }
+  }
+
+  /* ---------- pandas predictor ---------- */
+  function pandasStamp(p) {
+    var f = (p.frac + "000000000").slice(0, 9);
+    var fr = "";
+    if (!/^0+$/.test(f)) { fr = /000$/.test(f) ? f.slice(0, 6) : f; }
+    return fmtWall(p, " ", fr);
+  }
+  /* Full-precision compare: milliseconds first, then the fraction as nine
+     digits. pandas diffs nanosecond values, so 01:30:00.1 and 01:30:00.2 differ. */
+  function cmpNs(ma, fa, mb, fb) {
+    if (ma !== mb) { return ma < mb ? -1 : 1; }
+    var x = ((fa || "") + "000000000").slice(0, 9), y = ((fb || "") + "000000000").slice(0, 9);
+    return x < y ? -1 : (x > y ? 1 : 0);
+  }
+  function predictPandas(rows, amb, non) {
+    var i;
+    for (i = 0; i < rows.length; i++) {
+      if (rows[i].kind === "rejected") { return { skip: "The page rejected some rows, and pd.to_datetime would not parse them either. Fix or remove the rejected rows to get a prediction." }; }
+      if (rows[i].kind === "unclassified") { return { skip: "A row could not be classified, so no prediction is made." }; }
+      if (rows[i].p && rows[i].p.y < 1678) { return { skip: "This page does not predict pandas for rows before 1678 (row " + (i + 1) + ")." }; }
+    }
+    var dst = {};
+    if (amb === "infer") {
+      var trans = [];
+      for (i = 0; i < rows.length; i++) { if (rows[i].kind === "fold") { trans.push(i); } }
+      if (trans.length === 1) {
+        return { error: "ValueError: Cannot infer dst time from " + pandasStamp(rows[trans[0]].p) + " as there are no repeated times", row: trans[0] };
+      }
+      var groups = [], g = [];
+      for (i = 0; i < trans.length; i++) {
+        if (g.length && trans[i] !== g[g.length - 1] + 1) { groups.push(g); g = []; }
+        g.push(trans[i]);
+      }
+      if (g.length) { groups.push(g); }
+      for (var gi = 0; gi < groups.length; gi++) {
+        var grp = groups[gi], sw = [], allPos = true;
+        for (i = 1; i < grp.length; i++) {
+          var dlt = cmpNs(rows[grp[i]].earlier, rows[grp[i]].p.frac, rows[grp[i - 1]].earlier, rows[grp[i - 1]].p.frac);
+          if (dlt <= 0) { sw.push(i - 1); allPos = false; }
+        }
+        if (grp.length === 1 || allPos) {
+          return { error: "ValueError: " + pandasStamp(rows[grp[0]].p) + " is an ambiguous time and cannot be inferred.", row: grp[0] };
+        }
+        if (sw.length > 1) {
+          return { error: "ValueError: There are " + sw.length + " dst switches when there should only be 1.", row: grp[0] };
+        }
+        var at = sw[0] + 1;
+        for (i = 0; i < grp.length; i++) { dst[grp[i]] = i < at ? rows[grp[i]].earlier : rows[grp[i]].later; }
+      }
+    }
+    var out = [];
+    for (i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (r.kind === "nat") { out.push(null); }
+      else if (r.kind === "normal") { out.push(r.utc); }
+      else if (r.kind === "fold") {
+        if (amb === "infer") { out.push(dst[i]); }
+        else { return { error: "ValueError: Cannot infer dst time from " + pandasStamp(r.p) + ", try using the 'ambiguous' argument", row: i }; }
+      } else if (r.kind === "gap") {
+        if (non === "NaT") { out.push(null); }
+        else { return { error: "ValueError: " + pandasStamp(r.p) + " is a nonexistent time due to daylight savings time. Try using the 'nonexistent' argument.", row: i }; }
+      }
+    }
+    var back = -1, prev = null, prevFrac = "";
+    for (i = 0; i < out.length; i++) {
+      if (out[i] === null) { continue; }
+      if (prev !== null && cmpNs(out[i], rows[i].p.frac, prev, prevFrac) < 0) { back = i; break; }
+      prev = out[i];
+      prevFrac = rows[i].p.frac;
+    }
+    return { values: out, backward: back };
+  }
+
+  /* ---------- CSV ---------- */
+  function parseDelimited(text, delim) {
+    var rows = [], row = [], cell = "", q = false, i = 0, n = text.length;
+    while (i < n) {
+      var ch = text[i];
+      if (q) {
+        if (ch === '"') {
+          if (text[i + 1] === '"') { cell += '"'; i += 2; continue; }
+          q = false; i++; continue;
+        }
+        cell += ch; i++; continue;
+      }
+      if (ch === '"' && cell === "") { q = true; i++; continue; }
+      if (ch === delim) { row.push(cell); cell = ""; i++; continue; }
+      if (ch === "\r") { i++; continue; }
+      if (ch === "\n") { row.push(cell); rows.push(row); row = []; cell = ""; i++; continue; }
+      cell += ch; i++;
+    }
+    if (cell !== "" || row.length) { row.push(cell); rows.push(row); }
+    return rows;
+  }
+  function detectDelim(line) {
+    if (line.indexOf("\t") >= 0) { return "\t"; }
+    if (line.indexOf(",") < 0 && line.indexOf(";") >= 0) { return ";"; }
+    return ",";
+  }
+  function csvField(v) {
+    v = v == null ? "" : String(v);
+    return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  }
+  function readInput() {
+    var text = $("input").value.replace(/\r\n?/g, "\n");
+    if (text.endsWith("\n")) { text = text.slice(0, -1); }
+    if (!$("hasHeader").checked) {
+      var lines = text === "" ? [] : text.split("\n");
+      return { header: ["input"], records: lines.map(function (l) { return [l]; }), col: 0 };
+    }
+    var first = text.split("\n")[0] || "";
+    var all = parseDelimited(text, detectDelim(first));
+    var header = all.shift() || [];
+    var col = parseInt($("column").value, 10);
+    if (!(col >= 0 && col < header.length)) { col = 0; }
+    return { header: header, records: all, col: col };
+  }
+  function refreshColumns() {
+    var sel = $("column");
+    /* Keep the user's pick when the same column name is still in the header. */
+    var prevIdx = -1, prevText = null;
+    if (!sel.disabled && sel.selectedIndex >= 0) { prevIdx = sel.selectedIndex; prevText = sel.options[prevIdx].text; }
+    clear(sel);
+    if (!$("hasHeader").checked) {
+      sel.appendChild(el("option", { value: "0", text: "(one value per line)" }));
+      sel.disabled = true;
+      return;
+    }
+    var text = $("input").value.replace(/\r\n?/g, "\n");
+    var first = text.split("\n")[0] || "";
+    var header = (parseDelimited(first, detectDelim(first))[0]) || [];
+    var pick = -1, keep = -1;
+    header.forEach(function (h, i) {
+      var label = h === "" ? "(column " + (i + 1) + ")" : h;
+      sel.appendChild(el("option", { value: String(i), text: label }));
+      if (pick < 0 && /(time|date|stamp|_at$|^ts$)/i.test(h)) { pick = i; }
+      if (prevText !== null && label === prevText && (keep < 0 || i === prevIdx)) { keep = i; }
+    });
+    if (keep >= 0) { pick = keep; }
+    if (!header.length) { sel.appendChild(el("option", { value: "0", text: "(no header found)" })); }
+    sel.value = String(pick < 0 ? 0 : pick);
+    sel.disabled = false;
+  }
+
+  /* ---------- zone messages ---------- */
+  function zoneLabel(id) {
+    if (HAS_TEMPORAL) {
+      try { return Temporal.Instant.fromEpochMilliseconds(0).toZonedDateTimeISO(id).timeZoneId; } catch (e) { return id; }
+    }
+    return id;
+  }
+  function showMsg(box, cls, strongCls, strongText, text) {
+    box.appendChild(el("div", { cls: "msg " + cls }, [el("strong", { cls: strongCls, text: strongText }), " " + text]));
+  }
+
+  /* ---------- the run ---------- */
+  var runToken = 0;
+  var last = null;
+  function run() {
+    var token = ++runToken;
+    var msgs = $("zoneMsgs");
+    clear(msgs);
+    $("progress").textContent = "";
+    var id = $("zone").value.trim();
+    var zc = checkZone(id);
+    if (!zc.ok) {
+      showMsg(msgs, "err", "t-err", "Invalid time zone.", zc.reason);
+      $("results").classList.add("hidden");
+      return;
+    }
+    if ($("hasHeader").checked) { refreshColumns(); }
+    var label = zoneLabel(id);
+    if (zc.resolved !== label) {
+      showMsg(msgs, "info", "t-info", "Note.", "Your browser resolves this identifier as " + zc.resolved + ". This page keeps " + label + " in every output.");
+    }
+    var inp = readInput();
+    if (!inp.records.length) {
+      showMsg(msgs, "err", "t-err", "No rows.", "Paste at least one timestamp.");
+      $("results").classList.add("hidden");
+      return;
+    }
+    var capped = false;
+    if (inp.records.length > MAX_ROWS) { inp.records = inp.records.slice(0, MAX_ROWS); capped = true; }
+    var z = zoneObj(id);
+    var order = $("order").value;
+    var rows = new Array(inp.records.length);
+    var i = 0;
+    function step() {
+      if (token !== runToken) { return; }
+      var end = Math.min(i + CHUNK, rows.length);
+      for (; i < end; i++) {
+        var r = analyseCell(z, inp.records[i][inp.col], order);
+        r.tc = temporalCheck(label, r);
+        rows[i] = r;
+      }
+      $("progress").textContent = "Analysed " + i + " of " + rows.length + " rows" + (i < rows.length ? "..." : ".");
+      if (i < rows.length) { setTimeout(step, 0); return; }
+      last = { id: id, label: label, z: z, inp: inp, rows: rows, capped: capped };
+      render();
+    }
+    step();
+  }
+
+  function kindBadge(k) {
+    var map = { fold: ["k-fold", "FOLD"], gap: ["k-gap", "GAP"], normal: ["k-ok", "normal"], nat: ["soft", "NaT"], rejected: ["k-err", "REJECTED"], unclassified: ["k-err", "UNCLASSIFIED"] };
+    var m = map[k] || ["soft", k];
+    return el("span", { cls: "badge " + m[0], text: m[1] });
+  }
+  function cell(text, cls) { return el("td", { cls: cls || "m", text: text }); }
+
+  function render() {
+    if (!last) { return; }
+    var L = last, rows = L.rows, z = L.z, pol = $("policy").value;
+    var cnt = { normal: 0, fold: 0, gap: 0, nat: 0, rejected: 0, unclassified: 0, dis: 0, pre: 0, tcBad: 0, tcN: 0 };
+    rows.forEach(function (r) {
+      cnt[r.kind]++;
+      if (r.kind === "fold" && r.earlier !== r.later) { cnt.dis++; }
+      if (r.p && r.p.y < 1970) { cnt.pre++; }
+      if (r.tc) { cnt.tcN++; if (!r.tc.ok) { cnt.tcBad++; } }
+    });
+    $("results").classList.remove("hidden");
+
+    var sum = $("summary");
+    clear(sum);
+    [["rows", rows.length], ["normal", cnt.normal], ["fold", cnt.fold], ["gap", cnt.gap], ["NaT", cnt.nat], ["rejected by the parser", cnt.rejected + cnt.unclassified], ["DISAGREEMENT", cnt.dis]].forEach(function (p) {
+      sum.appendChild(el("li", null, [el("b", { text: String(p[1]) }), " " + p[0]]));
+    });
+    if (L.capped) { sum.appendChild(el("li", { cls: "k-err", text: "Input capped at " + MAX_ROWS + " rows; the rest was not analysed." })); }
+
+    var tl = $("temporalLine");
+    clear(tl);
+    if (HAS_TEMPORAL) {
+      if (cnt.tcBad) { showMsg(tl, "err", "t-err", "Temporal cross-check:", cnt.tcBad + " of " + cnt.tcN + " rows differ from this browser's Temporal. They are marked in red below."); }
+      else { showMsg(tl, "ok", "t-ok", "Temporal cross-check:", "all " + cnt.tcN + " parsed rows match this browser's Temporal (kind, earlier and later)."); }
+    } else {
+      showMsg(tl, "info", "t-info", "Temporal cross-check:", "this browser has no Temporal, so the per-row comparison is skipped.");
+    }
+
+    var pb = $("pandasBox");
+    clear(pb);
+    var pr = predictPandas(rows, $("pdAmb").value, $("pdNon").value);
+    var call = "Series.dt.tz_localize('" + L.label + "', ambiguous='" + $("pdAmb").value + "', nonexistent='" + $("pdNon").value + "')";
+    if (pr.skip) { showMsg(pb, "info", "t-info", "pandas prediction:", pr.skip); }
+    else if (pr.error) { showMsg(pb, "err", "t-err", "pandas prediction:", call + " raises at row " + (pr.row + 1) + ": " + pr.error); }
+    else {
+      showMsg(pb, "ok", "t-ok", "pandas prediction:", call + " accepts this column.");
+      if (pr.backward >= 0) { showMsg(pb, "warn", "t-warn", "Warning:", "pandas accepts this, but the resulting UTC sequence goes backward at row " + (pr.backward + 1) + "."); }
+    }
+    pb.appendChild(el("p", { cls: "hint", text: "Predicts tz_localize on the column after it is parsed to the wall times shown here, for example with pd.to_datetime(col, format='ISO8601'). Errors are named in pandas' order: every 'infer' error comes before any nonexistent error." }));
+
+    var pn = $("preNote");
+    clear(pn);
+    if (cnt.pre) {
+      var bq = el("blockquote", { text: "“In short, many, perhaps most, of the tz database’s pre-1970 and future timestamps are either wrong or misleading.” (tz database, theory.html)" });
+      var dv = el("div", { cls: "msg warn" }, [el("strong", { cls: "t-warn", text: "Pre-1970 rows:" }), " " + cnt.pre + " rows are before 1970.", bq]);
+      pn.appendChild(dv);
+    }
+
+    // affected table
+    var tbl = $("affected");
+    clear(tbl);
+    var heads = [
+      ["Row", ""], ["Input", ""], ["Kind", ""], ["Offset before", ""], ["Offset after", ""], ["Length", "gap or fold length"],
+      ["Temporal 'earlier'", "Temporal disambiguation 'earlier'"], ["Temporal 'later'", "Temporal disambiguation 'later'"],
+      ["Temporal 'compatible'", "Temporal default: earlier on a fold, later on a gap"], ["Temporal 'reject'", "Temporal throws RangeError"],
+      ["Python fold=0", "PEP 495: offset before the transition"], ["Python fold=1", "PEP 495: offset after the transition"],
+      ["PostgreSQL", "Appendix B.2: later instant on gaps and folds"], ["Disagreement", "Python and Temporal default versus PostgreSQL"],
+      ["pandas", "predicted offset under the chosen pandas options"], ["RFC 9557 (chosen policy)", "RFC 9557 section 4.1 suffix"], ["Notes", ""], ["Temporal check", ""]
+    ];
+    var thead = el("thead"), trh = el("tr");
+    heads.forEach(function (h) { var th = el("th", { scope: "col", text: h[0] }); if (h[1]) { th.setAttribute("title", h[1]); } trh.appendChild(th); });
+    thead.appendChild(trh);
+    tbl.appendChild(thead);
+    var tb = el("tbody"), shown = 0, trans = new Map();
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (r.kind !== "fold" && r.kind !== "gap") { continue; }
+      var key = r.T + "|" + r.before + "|" + r.after;
+      if (!trans.has(key)) { trans.set(key, { T: r.T, before: r.before, after: r.after, kind: r.kind, n: 0 }); }
+      trans.get(key).n++;
+      if (shown >= SHOW) { continue; }
+      shown++;
+      var fr = r.p.frac;
+      var py0 = r.kind === "fold" ? r.earlier : r.later;
+      var pg = r.later;
+      var tr = el("tr");
+      tr.appendChild(cell(String(i + 1)));
+      tr.appendChild(cell(String(L.inp.records[i][L.inp.col]).trim()));
+      tr.appendChild(el("td", null, [kindBadge(r.kind)]));
+      tr.appendChild(cell(fmtOff(r.before)));
+      tr.appendChild(cell(fmtOff(r.after)));
+      tr.appendChild(cell(fmtDur(r.len)));
+      tr.appendChild(cell(isoZ(r.earlier, fr)));
+      tr.appendChild(cell(isoZ(r.later, fr)));
+      tr.appendChild(cell(isoZ(r.kind === "fold" ? r.earlier : r.later, fr)));
+      tr.appendChild(cell("RangeError"));
+      tr.appendChild(cell(isoZ(py0, fr)));
+      tr.appendChild(cell(isoZ(r.kind === "fold" ? r.later : r.earlier, fr)));
+      tr.appendChild(cell(isoZ(pg, fr)));
+      tr.appendChild(el("td", null, [py0 !== pg ? el("span", { cls: "badge k-err", text: "DISAGREEMENT by " + fmtDur(pg - py0) }) : el("span", { cls: "soft", text: "agree" })]));
+      var pv = pr.values ? pr.values[i] : undefined;
+      tr.appendChild(cell(pv === undefined ? "n/a" : (pv === null ? "NaT" : fmtOff(r.E - pv))));
+      var cu = policyUtc(r, pol);
+      var ix = cu === null ? "rejected" : ixdtf(z, cu, fr, L.label);
+      tr.appendChild(cell(ix === null ? "omitted: offset has seconds" : ix));
+      var notes = [];
+      if (r.p.dateOnly) { notes.push("date only, treated as midnight"); }
+      if (r.p.y < 1970) { notes.push("pre-1970"); }
+      if (r.before % 60000 || r.after % 60000) { notes.push("offset has seconds; the RFC 3339 offset syntax is hours and minutes only"); }
+      tr.appendChild(el("td", { text: notes.join("; ") }));
+      tr.appendChild(tcCell(r));
+      tb.appendChild(tr);
+    }
+    if (!shown) {
+      var trn = el("tr");
+      trn.appendChild(el("td", { colspan: String(heads.length), text: "No gap or fold rows in this column." }));
+      tb.appendChild(trn);
+    }
+    tbl.appendChild(tb);
+    $("affNote").textContent = (cnt.fold + cnt.gap > SHOW) ? "Showing the first " + SHOW + " of " + (cnt.fold + cnt.gap) + " gap and fold rows. The CSV export carries every row." : "";
+
+    // transitions table
+    var tt = $("trans");
+    clear(tt);
+    var th2 = el("thead"), tr2 = el("tr");
+    ["First UTC second with the new offset", "Offset before", "Offset after", "Kind", "Local wall range affected (end excluded)", "Rows"].forEach(function (h) { tr2.appendChild(el("th", { scope: "col", text: h })); });
+    th2.appendChild(tr2);
+    tt.appendChild(th2);
+    var tb2 = el("tbody");
+    var list = Array.from(trans.values()).sort(function (a, b) { return a.T - b.T; });
+    list.forEach(function (t) {
+      var a = t.kind === "gap" ? t.T + t.before : t.T + t.after;
+      var b = t.kind === "gap" ? t.T + t.after : t.T + t.before;
+      var trr = el("tr");
+      trr.appendChild(cell(isoZ(t.T, "")));
+      trr.appendChild(cell(fmtOff(t.before)));
+      trr.appendChild(cell(fmtOff(t.after)));
+      trr.appendChild(el("td", null, [kindBadge(t.kind)]));
+      trr.appendChild(cell(fmtWall(fieldsOf(a), " ", "") + " to " + fmtWall(fieldsOf(b), " ", "")));
+      trr.appendChild(cell(String(t.n)));
+      tb2.appendChild(trr);
+    });
+    if (!list.length) { var e2 = el("tr"); e2.appendChild(el("td", { colspan: "6", text: "No transitions were needed." })); tb2.appendChild(e2); }
+    tt.appendChild(tb2);
+
+    // rejected and flagged
+    var ft = $("flags");
+    clear(ft);
+    var th3 = el("thead"), tr3 = el("tr");
+    ["Row", "Input", "Kind", "Reason or flag", "Temporal check"].forEach(function (h) { tr3.appendChild(el("th", { scope: "col", text: h })); });
+    th3.appendChild(tr3);
+    ft.appendChild(th3);
+    var tb3 = el("tbody"), fshown = 0, ftotal = 0;
+    for (i = 0; i < rows.length; i++) {
+      r = rows[i];
+      var why = [];
+      if (r.kind === "rejected") { why.push(r.reason); }
+      else if (r.kind === "unclassified") { why.push("could not be classified; check this row by hand"); }
+      else if (r.kind === "nat") { why.push("empty cell, kept as NaT"); }
+      else if (r.kind === "normal") {
+        if (r.p.dateOnly) { why.push("date only, treated as midnight"); }
+        if (r.p.y < 1970) { why.push("pre-1970"); }
+        if (r.off % 60000) { why.push("offset " + fmtOff(r.off) + " has seconds; RFC 9557 string omitted because the RFC 3339 offset syntax is hours and minutes only"); }
+        if (r.tc && !r.tc.ok) { why.push("differs from Temporal"); }
+      }
+      if (!why.length) { continue; }
+      ftotal++;
+      if (fshown >= SHOW) { continue; }
+      fshown++;
+      var tr4 = el("tr");
+      tr4.appendChild(cell(String(i + 1)));
+      tr4.appendChild(cell(String(L.inp.records[i][L.inp.col] == null ? "" : L.inp.records[i][L.inp.col]).trim()));
+      tr4.appendChild(el("td", null, [kindBadge(r.kind)]));
+      tr4.appendChild(el("td", { text: why.join("; ") }));
+      tr4.appendChild(tcCell(r));
+      tb3.appendChild(tr4);
+    }
+    if (!ftotal) { var e3 = el("tr"); e3.appendChild(el("td", { colspan: "5", text: "Nothing rejected or flagged." })); tb3.appendChild(e3); }
+    ft.appendChild(tb3);
+    $("flagNote").textContent = ftotal > SHOW ? "Showing the first " + SHOW + " of " + ftotal + " rows. The CSV export carries every row." : "";
+
+    // exports
+    var out = [L.inp.header.concat(["kind", "status", "utc", "offset_used", "ixdtf"]).map(csvField).join(",")];
+    var bools = [];
+    for (i = 0; i < rows.length; i++) {
+      r = rows[i];
+      var rec = L.inp.records[i].slice();
+      while (rec.length < L.inp.header.length) { rec.push(""); }
+      var k = r.kind, st = "ok", u = "", ou = "", ix2 = "";
+      if (k === "nat") { st = "NaT"; }
+      else if (k === "rejected") { st = "parse error: " + r.reason; }
+      else if (k === "unclassified") { st = "unclassified"; }
+      else {
+        var cu2 = policyUtc(r, pol);
+        if (cu2 === null) { st = "rejected"; }
+        else {
+          var o = offsetAt(z, cu2);
+          u = isoZ(cu2, r.p.frac);
+          ou = fmtOff(o);
+          ix2 = ixdtf(z, cu2, r.p.frac, L.label) || "";
+        }
+      }
+      out.push(rec.concat([k, st, u, ou, ix2]).map(csvField).join(","));
+      bools.push(r.kind === "fold" && (pol === "earlier" || pol === "compatible") ? "True" : "False");
+    }
+    $("csvOut").value = out.join("\n");
+    $("boolOut").value = pol === "reject" ? "The 'reject' policy has no pandas bool list: pick another export policy." : "ambiguous=[" + bools.join(", ") + "]";
+    $("copyCsvMsg").textContent = "";
+    $("copyBoolMsg").textContent = "";
+  }
+  function tcCell(r) {
+    if (!r.tc) { return el("td", { cls: "soft", text: HAS_TEMPORAL ? "" : "no Temporal" }); }
+    if (r.tc.ok) { return el("td", { cls: "k-ok", text: "matches" }); }
+    var t = r.tc.error ? "Temporal error: " + r.tc.error : "MISMATCH: Temporal says " + r.tc.kind + ", earlier " + isoZ(r.tc.earlier, "") + ", later " + isoZ(r.tc.later, "");
+    return el("td", { cls: "k-err", text: t });
+  }
+
+  /* ---------- buttons ---------- */
+  function copyFrom(id, msgId) {
+    var ta = $(id), msg = $(msgId);
+    function done(ok) { msg.textContent = ok ? "Copied." : "Copy failed: select the text and copy it by hand."; }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(ta.value).then(function () { done(true); }, function () {
+        ta.select();
+        try { done(document.execCommand("copy")); } catch (e) { done(false); }
+      });
+    } else {
+      ta.select();
+      try { done(document.execCommand("copy")); } catch (e) { done(false); }
+    }
+  }
+  var EXAMPLE = "id,created_at,amount\n1,2025-03-09 01:59:00,10.00\n2,2025-03-09 02:30:00,12.50\n3,2025-03-09 03:05:00,7.25\n4,2025-11-02 00:59:59,3.00\n5,2025-11-02 01:10:00,4.00\n6,2025-11-02 01:50:00,4.50\n7,2025-11-02 01:20:00,5.00\n8,2025-11-02 01:40:00.250,5.50\n9,2025-11-02 02:00:00,6.00\n10,,1.00\n11,2025-11-03,2.00";
+  $("run").addEventListener("click", run);
+  $("example").addEventListener("click", function () {
+    $("input").value = EXAMPLE;
+    $("hasHeader").checked = true;
+    $("zone").value = "America/New_York";
+    $("order").value = "iso";
+    refreshColumns();
+    run();
+  });
+  $("clear").addEventListener("click", function () {
+    runToken++;
+    $("input").value = "";
+    $("hasHeader").checked = false;
+    refreshColumns();
+    clear($("zoneMsgs"));
+    $("progress").textContent = "";
+    $("results").classList.add("hidden");
+    last = null;
+  });
+  $("hasHeader").addEventListener("change", refreshColumns);
+  $("input").addEventListener("change", refreshColumns);
+  $("input").addEventListener("keydown", function (e) { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); run(); } });
+  ["policy", "pdAmb", "pdNon"].forEach(function (id) { $(id).addEventListener("change", render); });
+  $("copyCsv").addEventListener("click", function () { copyFrom("csvOut", "copyCsvMsg"); });
+  $("copyBool").addEventListener("click", function () { copyFrom("boolOut", "copyBoolMsg"); });
+  try {
+    var dl = $("zones");
+    (Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : []).forEach(function (zn) { dl.appendChild(el("option", { value: zn })); });
+  } catch (e) { /* datalist is a convenience only */ }
+
+  /* ---------- self test ---------- */
+  var FIX = [
+    // zone, wall, kind, earlier, later, transition, length ms
+    ["America/New_York", "2025-11-02 01:30", "fold", "2025-11-02T05:30:00Z", "2025-11-02T06:30:00Z", null, 3600000],
+    ["America/New_York", "2025-03-09 02:30", "gap", "2025-03-09T06:30:00Z", "2025-03-09T07:30:00Z", "2025-03-09T07:00:00Z", 3600000],
+    ["America/New_York", "2018-03-11 02:30", "gap", null, "2018-03-11T07:30:00Z", null, null],
+    ["America/New_York", "2018-11-04 01:30", "fold", null, "2018-11-04T06:30:00Z", null, null],
+    ["Australia/Lord_Howe", "2025-10-05 02:15", "gap", "2025-10-04T15:15:00Z", "2025-10-04T15:45:00Z", "2025-10-04T15:30:00Z", 1800000],
+    ["Australia/Lord_Howe", "2025-04-06 01:45", "fold", "2025-04-05T14:45:00Z", "2025-04-05T15:15:00Z", null, 1800000],
+    ["Europe/Dublin", "2025-10-26 01:30", "fold", "2025-10-26T00:30:00Z", "2025-10-26T01:30:00Z", null, 3600000],
+    ["Europe/Dublin", "2025-03-30 01:30", "gap", "2025-03-30T00:30:00Z", "2025-03-30T01:30:00Z", null, 3600000],
+    ["Pacific/Apia", "2011-12-30 12:00", "gap", "2011-12-29T22:00:00Z", "2011-12-30T22:00:00Z", null, 86400000],
+    ["America/Caracas", "2016-05-01 02:40", "gap", "2016-05-01T06:40:00Z", "2016-05-01T07:10:00Z", null, 1800000],
+    ["America/Caracas", "2007-12-09 02:40", "fold", "2007-12-09T06:40:00Z", "2007-12-09T07:10:00Z", null, 1800000],
+    ["Antarctica/Troll", "2025-03-30 01:30", "gap", "2025-03-29T23:30:00Z", "2025-03-30T01:30:00Z", null, 7200000],
+    ["Antarctica/Troll", "2025-10-26 02:30", "fold", "2025-10-26T00:30:00Z", "2025-10-26T02:30:00Z", null, 7200000],
+    ["America/St_Johns", "2025-11-02 01:30", "fold", "2025-11-02T04:00:00Z", "2025-11-02T05:00:00Z", null, null],
+    ["Europe/Moscow", "2014-10-26 01:30", "fold", "2014-10-25T21:30:00Z", "2014-10-25T22:30:00Z", null, null],
+    ["America/Sao_Paulo", "2018-11-04", "gap", "2018-11-04T02:00:00Z", "2018-11-04T03:00:00Z", null, null],
+    ["America/Sao_Paulo", "2019-02-16 23:30", "fold", "2019-02-17T01:30:00Z", "2019-02-17T02:30:00Z", null, null],
+    ["America/New_York", "1883-11-18 12:00", "fold", "1883-11-18T16:56:02Z", "1883-11-18T17:00:00Z", null, 238000],
+    ["America/New_York", "1850-01-01 12:00", "normal", "1850-01-01T16:56:02Z", null, null, null],
+    ["America/New_York", "2025-06-01 12:00", "normal", "2025-06-01T16:00:00Z", null, null, null]
+  ];
+  var NY = "America/New_York", D = "2025-11-02 ";
+  var PD = [
+    ["one fold row, infer", NY, [D + "01:30"], "infer", "raise", { error: "ValueError: Cannot infer dst time from 2025-11-02 01:30:00 as there are no repeated times" }],
+    ["two equal fold rows, infer", NY, [D + "01:30", D + "01:30"], "infer", "raise", { offs: ["-04:00", "-05:00"] }],
+    ["one switch, infer", NY, [D + "01:10", D + "01:50", D + "01:20", D + "01:40"], "infer", "raise", { offs: ["-04:00", "-04:00", "-05:00", "-05:00"] }],
+    ["two switches, infer", NY, [D + "01:10", D + "01:50", D + "01:20", D + "01:40", D + "01:05"], "infer", "raise", { error: "ValueError: There are 2 dst switches when there should only be 1." }],
+    ["three equal rows, infer", NY, [D + "01:30", D + "01:30", D + "01:30"], "infer", "raise", { error: "ValueError: There are 2 dst switches when there should only be 1." }],
+    ["increasing pair, infer", NY, [D + "01:10", D + "01:20"], "infer", "raise", { error: "ValueError: 2025-11-02 01:10:00 is an ambiguous time and cannot be inferred." }],
+    ["NaT splits runs, infer", NY, [D + "01:10", D + "01:10", "", D + "01:10", D + "01:10"], "infer", "raise", { offs: ["-04:00", "-05:00", "NaT", "-04:00", "-05:00"] }],
+    ["two years adjacent, infer", NY, ["2024-11-03 01:10", "2024-11-03 01:10", "2025-11-02 01:10", "2025-11-02 01:10"], "infer", "raise", { error: "ValueError: There are 2 dst switches when there should only be 1." }],
+    ["non-monotonic accepted, infer", NY, [D + "01:50", D + "01:10", D + "03:00", D + "01:20", D + "01:10"], "infer", "raise", { offs: ["-04:00", "-05:00", "-05:00", "-04:00", "-05:00"], backward: 3 }],
+    ["fold, default", NY, [D + "01:30"], "raise", "raise", { error: "ValueError: Cannot infer dst time from 2025-11-02 01:30:00, try using the 'ambiguous' argument" }],
+    ["gap, default", NY, ["2025-03-09 02:30"], "raise", "raise", { error: "ValueError: 2025-03-09 02:30:00 is a nonexistent time due to daylight savings time. Try using the 'nonexistent' argument." }],
+    ["infer error before nonexistent error", NY, ["2025-03-09 02:30", D + "01:30"], "infer", "raise", { error: "ValueError: Cannot infer dst time from 2025-11-02 01:30:00 as there are no repeated times" }],
+    ["nonexistent='NaT' after infer", NY, ["2025-03-09 02:30", D + "01:30", D + "01:30"], "infer", "NaT", { offs: ["NaT", "-04:00", "-05:00"] }],
+    ["fraction in the stamp", NY, [D + "01:30:00.5"], "raise", "raise", { error: "ValueError: Cannot infer dst time from 2025-11-02 01:30:00.500000, try using the 'ambiguous' argument" }],
+    ["nanosecond fraction in the stamp", NY, [D + "01:30:00.123456789"], "raise", "raise", { error: "ValueError: Cannot infer dst time from 2025-11-02 01:30:00.123456789, try using the 'ambiguous' argument" }],
+    ["sub-second increasing pair, infer", NY, [D + "01:30:00.1", D + "01:30:00.2"], "infer", "raise", { error: "ValueError: 2025-11-02 01:30:00.100000 is an ambiguous time and cannot be inferred." }],
+    ["sub-second one switch, infer", NY, [D + "01:10:00.1", D + "01:10:00.9", D + "01:10:00.5"], "infer", "raise", { offs: ["-04:00", "-04:00", "-05:00"] }],
+    ["pandas docs CET infer example", "CET", ["2018-10-28 01:30:00", "2018-10-28 02:00:00", "2018-10-28 02:30:00", "2018-10-28 02:00:00", "2018-10-28 02:30:00", "2018-10-28 03:00:00", "2018-10-28 03:30:00"], "infer", "raise", { offs: ["+02:00", "+02:00", "+02:00", "+01:00", "+01:00", "+01:00", "+01:00"] }]
+  ];
+  var PARSE = [
+    ["hour 24 rejected", "2025-01-01 24:00", "hour 24 is not accepted; write 00:00 of the next day"],
+    ["second 60 rejected", "2025-01-01 12:00:60", "second 60 (a leap second) is not accepted"],
+    ["invalid calendar date rejected", "2025-02-30 12:00", "day 30 does not exist in 2025-02"],
+    ["Z suffix rejected", "2025-11-02T01:30Z", "already has an offset, not a naive timestamp"],
+    ["numeric offset rejected", "2025-11-02 01:30:00-04:00", "already has an offset, not a naive timestamp"],
+    ["slash date needs a date order", "11/02/2025 01:30", "slash date: choose MM/DD/YYYY or DD/MM/YYYY under Date order (this page never guesses)"],
+    ["year 0 rejected", "0000-06-01 12:00", "year 0000 is out of range (1 to 9999)"]
+  ];
+  function runTests() {
+    var list = $("testList");
+    clear(list);
+    var pass = 0, fail = 0, xfail = 0;
+    function t(name, got, want, expectFail) {
+      var ok = got === want;
+      if (expectFail) {
+        if (!ok) { xfail++; list.appendChild(el("li", null, [el("span", { cls: "k-info", text: "EXPECTED FAILURE " }), name + " (positive control: got " + got + ", assertion wanted " + want + ")"])); }
+        else { fail++; list.appendChild(el("li", null, [el("span", { cls: "k-err", text: "FAIL " }), name + ": the positive control passed, so the harness is not checking anything"])); }
+        return;
+      }
+      if (ok) { pass++; list.appendChild(el("li", null, [el("span", { cls: "k-ok", text: "PASS " }), name])); }
+      else { fail++; list.appendChild(el("li", null, [el("span", { cls: "k-err", text: "FAIL " }), name + ": got " + got + ", expected " + want])); }
+    }
+    function an(zone, wall) { return analyseCell(zoneObj(zone), wall, "iso"); }
+    FIX.forEach(function (f) {
+      var r = an(f[0], f[1]), nm = f[0] + " " + f[1];
+      t(nm + " kind", r.kind, f[2]);
+      if (f[2] === "normal") { t(nm + " UTC", isoZ(r.utc, ""), f[3]); return; }
+      if (f[3]) { t(nm + " earlier", isoZ(r.earlier, ""), f[3]); }
+      if (f[4]) { t(nm + " later (PostgreSQL)", isoZ(policyUtc(r, "postgres"), ""), f[4]); }
+      if (f[5]) { t(nm + " transition", isoZ(r.T, ""), f[5]); }
+      if (f[6]) { t(nm + " length", String(r.len), String(f[6])); }
+    });
+    var ny1 = an(NY, "2025-11-02 01:30"), ny2 = an(NY, "2025-03-09 02:30");
+    t("compatible on a fold = earlier", isoZ(policyUtc(ny1, "compatible"), ""), "2025-11-02T05:30:00Z");
+    t("compatible on a gap = later", isoZ(policyUtc(ny2, "compatible"), ""), "2025-03-09T07:30:00Z");
+    t("Python fold=1 on a gap = earlier", isoZ(policyUtc(ny2, "py1"), ""), "2025-03-09T06:30:00Z");
+    t("Python fold=1 on a fold = later", isoZ(policyUtc(ny1, "py1"), ""), "2025-11-02T06:30:00Z");
+    t("PostgreSQL on a gap = later", isoZ(policyUtc(ny2, "postgres"), ""), "2025-03-09T07:30:00Z");
+    t("reject gives no value", String(policyUtc(ny1, "reject")), "null");
+    t("RFC 9557 string, earlier on the fold", ixdtf(zoneObj(NY), ny1.earlier, "", NY), "2025-11-02T01:30:00-04:00[America/New_York]");
+    t("RFC 9557 string, compatible on the gap", ixdtf(zoneObj(NY), ny2.later, "", NY), "2025-03-09T03:30:00-04:00[America/New_York]");
+    var lmt = an(NY, "1850-01-01 12:00");
+    t("LMT offset keeps its seconds", fmtOff(lmt.off), "-04:56:02");
+    t("LMT row omits the RFC 9557 string", String(ixdtf(zoneObj(NY), lmt.utc, "", NY)), "null");
+    var fr = an(NY, "2025-11-02 01:30:00.123456789");
+    t("fraction carried as a string", isoZ(fr.earlier, fr.p.frac), "2025-11-02T05:30:00.123456789Z");
+    var y50 = analyseCell(zoneObj("UTC"), "0050-06-01 12:00", "iso");
+    t("year 0050 is not mapped to 1950", isoZ(y50.utc, ""), "0050-06-01T12:00:00Z");
+    var dOnly = parseCell("2018-11-04", "iso");
+    t("date only flagged", String(dOnly.dateOnly), "true");
+    t("MM/DD/YYYY order", isoZ(analyseCell(zoneObj(NY), "11/02/2025 01:30", "mdy").earlier, ""), "2025-11-02T05:30:00Z");
+    t("DD/MM/YYYY order", isoZ(analyseCell(zoneObj(NY), "02/11/2025 01:30", "dmy").earlier, ""), "2025-11-02T05:30:00Z");
+    t("empty cell is NaT", analyseCell(zoneObj(NY), "  ", "iso").kind, "nat");
+    PARSE.forEach(function (p) { t(p[0], String(parseCell(p[1], "iso").err), p[2]); });
+    t("Bogus/Zone is a user-facing error", String(checkZone("Bogus/Zone").ok) + " " + checkZone("Bogus/Zone").reason, "false This browser does not recognise the time zone identifier \"Bogus/Zone\".");
+    t("Europe/Kyiv is accepted", String(checkZone("Europe/Kyiv").ok), "true");
+    t("Europe/Kyiv is echoed in the RFC 9557 string", String(ixdtf(zoneObj("Europe/Kyiv"), an("Europe/Kyiv", "2025-06-01 12:00").utc, "", zoneLabel("Europe/Kyiv"))), "2025-06-01T12:00:00+03:00[Europe/Kyiv]");
+    PD.forEach(function (c) {
+      var z = zoneObj(c[1]);
+      var rows = c[2].map(function (w) { return analyseCell(z, w, "iso"); });
+      var pr = predictPandas(rows, c[3], c[4]);
+      var want = c[5];
+      if (want.error) { t("pandas: " + c[0], String(pr.error), want.error); return; }
+      var offs = pr.values ? pr.values.map(function (v, i) { return v === null ? "NaT" : fmtOff(rows[i].E - v); }).join(" ") : String(pr.error || pr.skip);
+      t("pandas: " + c[0], offs, want.offs.join(" "));
+      if (want.backward !== undefined) { t("pandas: " + c[0] + ", backward warning row", String(pr.backward), String(want.backward)); }
+    });
+    t("positive control: 1 + 1 equals 3", String(1 + 1), "3", true);
+    var s = $("testSummary");
+    clear(s);
+    s.appendChild(el("strong", { cls: fail ? "k-err" : "k-ok", text: fail ? "Self test FAILED: " : "Self test passed: " }));
+    s.appendChild(document.createTextNode(pass + " passed, " + fail + " failed, " + xfail + " expected failure (the positive control)."));
+    document.documentElement.setAttribute("data-selftest", fail ? "fail" : "pass");
+    runDifferential();
+  }
+
+  /* ---------- differential test against Temporal ---------- */
+  var DIFF_ZONES = ["America/New_York", "America/St_Johns", "America/Sao_Paulo", "America/Caracas", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Anchorage", "America/Havana", "America/Santiago", "America/Asuncion", "America/Mexico_City", "America/Halifax", "America/Godthab", "Europe/Dublin", "Europe/London", "Europe/Lisbon", "Europe/Berlin", "Europe/Moscow", "Europe/Istanbul", "Europe/Minsk", "Europe/Kyiv", "Asia/Tehran", "Asia/Jerusalem", "Asia/Beirut", "Asia/Gaza", "Asia/Pyongyang", "Asia/Kolkata", "Asia/Shanghai", "Asia/Tokyo", "Africa/Casablanca", "Africa/Cairo", "Antarctica/Troll", "Australia/Lord_Howe", "Australia/Sydney", "Australia/Adelaide", "Pacific/Apia", "Pacific/Auckland", "Pacific/Chatham", "Pacific/Norfolk"];
+  function runDifferential() {
+    var ds = $("diffSummary");
+    clear(ds);
+    if (!HAS_TEMPORAL) {
+      ds.appendChild(el("span", { cls: "soft", text: "Temporal differential test: skipped, this browser has no Temporal." }));
+      return;
+    }
+    var token = ++diffToken;
+    var zi = 0, zdt = null, zone = null, z = null, nTrans = 0, nWall = 0, nBad = 0, firstBad = "";
+    var endMs = wallMs(2041, 1, 1, 0, 0, 0);
+    ds.appendChild(el("span", { cls: "soft", text: "Temporal differential test: running..." }));
+    function next() {
+      if (token !== diffToken) { return; }
+      var t0 = Date.now();
+      while (Date.now() - t0 < 30) {
+        if (!zdt) {
+          if (zi >= DIFF_ZONES.length) { finish(); return; }
+          zone = DIFF_ZONES[zi++];
+          if (!checkZone(zone).ok) { continue; }
+          z = zoneObj(zone);
+          try { zdt = Temporal.Instant.fromEpochMilliseconds(0).toZonedDateTimeISO(zone); } catch (e) { zdt = null; continue; }
+        }
+        var tr = zdt.getTimeZoneTransition("next");
+        if (!tr || tr.epochMilliseconds >= endMs) { zdt = null; continue; }
+        zdt = tr;
+        nTrans++;
+        var T = tr.epochMilliseconds;
+        var before = Temporal.Instant.fromEpochMilliseconds(T - 1).toZonedDateTimeISO(zone).offsetNanoseconds / 1e6;
+        var after = tr.offsetNanoseconds / 1e6;
+        var lo = Math.min(before, after), hi = Math.max(before, after);
+        var mid = T + Math.floor((lo + hi) / 2000) * 1000;
+        [T + lo - 1000, T + lo, mid, T + hi - 1000, T + hi].forEach(function (W) {
+          nWall++;
+          var f = fieldsOf(W);
+          var mine = classify(z, W);
+          var pdt = Temporal.PlainDateTime.from({ year: f.y, month: f.mo, day: f.d, hour: f.h, minute: f.mi, second: f.s });
+          var e = pdt.toZonedDateTime(zone, { disambiguation: "earlier" }).epochMilliseconds;
+          var l = pdt.toZonedDateTime(zone, { disambiguation: "later" }).epochMilliseconds;
+          var rejects = false;
+          try { pdt.toZonedDateTime(zone, { disambiguation: "reject" }); } catch (x) { rejects = true; }
+          var kind = !rejects ? "normal" : (pdt.toZonedDateTime(zone, { disambiguation: "earlier" }).toPlainDateTime().equals(pdt) ? "fold" : "gap");
+          var ok = kind === mine.kind && (kind === "normal" ? (mine.utc === e && e === l) : (mine.earlier === e && mine.later === l));
+          if (!ok) { nBad++; if (!firstBad) { firstBad = zone + " " + fmtWall(f, " ", ""); } }
+        });
+      }
+      clear(ds);
+      ds.appendChild(el("span", { cls: "soft", text: "Temporal differential test: " + zi + " of " + DIFF_ZONES.length + " zones..." }));
+      setTimeout(next, 0);
+    }
+    function finish() {
+      clear(ds);
+      ds.appendChild(el("strong", { cls: nBad ? "k-err" : "k-ok", text: nBad ? "Temporal differential test FAILED: " : "Temporal differential test passed: " }));
+      ds.appendChild(document.createTextNode(DIFF_ZONES.length + " zones, " + nTrans + " transitions from 1970 to 2040, " + nWall + " wall times, " + nBad + " mismatches" + (firstBad ? " (first: " + firstBad + ")" : "") + ". These counts come from this browser's own tz data."));
+      document.documentElement.setAttribute("data-difftest", nBad ? "fail" : "pass:" + nTrans + ":" + nWall);
+    }
+    next();
+  }
+  var diffToken = 0;
+  $("runTests").addEventListener("click", runTests);
+  runTests();
+})();
+</script>
+<script>
+/* Remember the light or dark choice across visits. */
+(function () {
+  var KEY = "theme";
+  var btn = document.getElementById("theme-toggle");
+  function apply(t) {
+    document.documentElement.setAttribute("data-theme", t);
+    var other = t === "dark" ? "light" : "dark";
+    btn.textContent = other === "light" ? "Light" : "Dark";
+    btn.setAttribute("aria-label", "Switch to " + other + " theme");
+  }
+  apply(document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark");
+  btn.addEventListener("click", function () {
+    var t = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
+    apply(t);
+    try { localStorage.setItem(KEY, t); } catch (e) {}
+  });
+})();
+</script>
+</body>
+</html>
