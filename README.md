@@ -90,7 +90,7 @@ This is an independent project. It is not affiliated with or endorsed by the pan
 
 ## Related
 
-- [timezone-converter](https://github.com/0xelitesystem/timezone-converter): one moment across many zones, with a meeting planner.
+- [multi-zone-meeting-picker](https://github.com/0xelitesystem/multi-zone-meeting-picker): one moment across many zones, with a meeting planner.
 - [unix-timestamp-converter](https://github.com/0xelitesystem/unix-timestamp-converter): convert a single epoch value to and from a readable date.
 - [timezone-and-utc-basics-reference](https://github.com/0xelitesystem/timezone-and-utc-basics-reference): plain-language reference on time zones and UTC.
 
